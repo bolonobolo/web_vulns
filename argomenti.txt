@@ -1,0 +1,5 @@
+path trasversal
+os command injection
+SQL injection
+XSS
+CSRF
